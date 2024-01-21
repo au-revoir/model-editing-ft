@@ -1,0 +1,208 @@
+import json
+import random
+from torch.utils.data import Dataset
+from generate import generate_fast
+
+random.seed(42)
+
+class DPODataset:
+    def __init__(self, model, tokenizer, path, script_args):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.path = path
+        self.prompt_rewrite = script_args.prompt_rewrite
+        self.prompt_paraphrase = script_args.prompt_paraphrase
+        self.prompt_neighborhood = script_args.prompt_neighborhood
+        self.prompt_neighborhood_type = script_args.prompt_neighborhood_type
+        self.num_neighborhood_prompts = script_args.num_neighborhood_prompts
+        self.generated_paraphrase = script_args.generated_paraphrase
+        self.load_data()
+        #self.length_params = [[10, 50], [20, 50]]
+        #self.length_params = [[5, 50], [10, 50]]
+        #self.length_params = [[5, 25], [10, 50]]
+        ##self.length_params = [[5, 5], [10, 10]]
+        self.length_params = [[5, 1]]#, [10, 3]]
+        #self.length_params = [[5, 35], [10, 60]]
+        #self.length_params = [[5, 100]]
+        #self.length_params = [[5, 4], [10, 5]]
+        print("length_params: ", self.length_params)
+        
+
+    def load_data(self):
+        with open(self.path) as fp:
+            self.data = json.load(fp)[1:10]
+
+    def get_dataset(self):
+        data_modified = []
+        #print(data[0])
+        #quit()
+        for i in self.data:
+            all_prompts = []
+            all_chosen = []
+            all_rejected = []
+
+            requested_rewrite = i["requested_rewrite"]
+            subject = requested_rewrite["subject"]
+
+            """
+            if self.prompt_neighborhood == True:
+                num_neighborhood_prompts = len(i["new_neighborhood_prompts"])
+            else:
+                num_neighborhood_prompts = 1
+            """
+            lm_prompts = []
+            if self.prompt_rewrite == True:
+                original_rewrite_prompt = [requested_rewrite["prompt"].format(subject)] #* num_neighborhood_prompts
+                original_rewrite_chosen = [" " + requested_rewrite["target_new"]["str"]] #* num_neighborhood_prompts
+                original_rewrite_rejected = [" " + requested_rewrite["target_true"]["str"]] #* num_neighborhood_prompts
+                all_prompts.extend(original_rewrite_prompt)
+                all_chosen.extend(original_rewrite_chosen)
+                all_rejected.extend(original_rewrite_rejected)
+
+                lm_prompts.append(requested_rewrite["prompt"].format(subject) + " " + requested_rewrite["target_new"]["str"])
+
+            if self.generated_paraphrase == True:
+                #length_params = [[10, 50], [20, 50]]
+                #length_params = [[5, 50], [10, 50]]
+                #length_params = [[5, 25], [10, 25]]
+                #length_params = [[10, 2], [20, 1]]
+                paraphrase_prompts = [x + ". " + requested_rewrite["prompt"].format(subject) for length, n_gen in self.length_params 
+                                      for x in generate_fast(self.model, self.tokenizer, ["<|endoftext|>"], n_gen_per_prompt=n_gen,  max_out_len=length)]
+                chosen_paraphrase_answers = [" " + requested_rewrite["target_new"]["str"]] * len(paraphrase_prompts)
+                rejected_paraphrase_answers = [" " + requested_rewrite["target_true"]["str"]] * len(paraphrase_prompts)
+                all_prompts.extend(paraphrase_prompts)
+                all_chosen.extend(chosen_paraphrase_answers)
+                all_rejected.extend(rejected_paraphrase_answers)
+                #paraphrase_prompts = [x + ". " + requested_rewrite["prompt"].format(subject) for x in paraphrase_generated_prompts]
+                #print("paraphrase_prompts: ", paraphrase_prompts)
+                #quit()
+                lm_prompts.extend([x + " " + requested_rewrite["target_new"]["str"] for x in paraphrase_prompts])
+
+            elif self.prompt_paraphrase == True:
+                paraphrase_prompts = [paraphrase for paraphrase in i["paraphrase_prompts"]]
+                #paraphrase_prompts = [paraphrase for paraphrase in i["new_paraphrase_prompts"]]
+                #paraphrase_prompts = [paraphrase for paraphrase in i["generation_prompts"][:5]]
+                chosen_paraphrase_answers = [" " + requested_rewrite["target_new"]["str"]] * len(paraphrase_prompts)
+                rejected_paraphrase_answers = [" " + requested_rewrite["target_true"]["str"]] * len(paraphrase_prompts)
+                all_prompts.extend(paraphrase_prompts)
+                all_chosen.extend(chosen_paraphrase_answers)
+                all_rejected.extend(rejected_paraphrase_answers)
+
+
+            #print("paraphrase_prompts: ", paraphrase_prompts)
+            #quit()
+            if self.prompt_neighborhood == True:
+                neighborhood_prompts = []
+                chosen_neighborhood_answers = []
+                rejected_neighborhood_answers = []
+                if self.prompt_neighborhood_type == "similar_examples":
+                    for neighbor in i["similar_neighborhood_prompts"][:1]: 
+
+                        neighborhood_prompts.extend(neighbor["prompts"])#[:len(i["neighborhood_prompts"])//2]
+                        chosen_neighborhood_answers.extend([" " + neighbor["target_true"]] * len(neighbor["prompts"]))
+                        rejected_neighborhood_answers.extend([" " + neighbor["target_new"]] * len(neighbor["prompts"]))
+                        #chosen_neighborhood_answers = [" " + requested_rewrite["target_true"]["str"]] * len(neighborhood_prompts)
+                        #rejected_neighborhood_answers = [" " + requested_rewrite["target_new"]["str"]] * len(neighborhood_prompts)
+                        #rejected_neighborhood_answers = [" " + requested_rewrite["target_new"]["str"]] * len(neighborhood_prompts)
+                elif self.prompt_neighborhood_type == "original_examples":
+                    neighborhood_prompts = i["neighborhood_prompts"]#[:len(i["neighborhood_prompts"])//2]
+                    chosen_neighborhood_answers = [" " + requested_rewrite["target_true"]["str"]] * len(neighborhood_prompts)
+                    rejected_neighborhood_answers = [" " + requested_rewrite["target_new"]["str"]] * len(neighborhood_prompts)
+                else:
+                    raise NotImplementedError
+
+                if self.num_neighborhood_prompts != -1:
+                    total_neighborhood_prompts = len(neighborhood_prompts)
+                    num_prompts_to_be_selected = min(self.num_neighborhood_prompts, total_neighborhood_prompts)
+                    neighborhood_indices_to_select = random.randint(0, num_prompts_to_be_selected - 1)
+
+                    neighborhood_prompts = [neighborhood_prompts[idx] for idx in neighborhood_indices_to_select]
+                    chosen_neighborhood_answers = [chosen_neighborhood_answers[idx] for idx in neighborhood_indices_to_select]
+                    rejected_neighborhood_answers = [rejected_neighborhood_answers[idx] for idx in neighborhood_indices_to_select]
+
+                all_prompts.extend(neighborhood_prompts)
+                all_chosen.extend(chosen_neighborhood_answers)
+                all_rejected.extend(rejected_neighborhood_answers)
+                lm_prompts.extend([self.tokenizer.eos_token] * len(neighborhood_prompts))
+
+            """
+            original_rewrite_prompt = [requested_rewrite["prompt"].format(subject)] #* len(neighborhood_prompts)
+            original_rewrite_chosen = [" " + requested_rewrite["target_new"]["str"]] #* len(neighborhood_prompts)
+            original_rewrite_rejected = [" " + requested_rewrite["target_true"]["str"]] #* len(neighborhood_prompts) 
+            """
+            """
+            paraphrase_prompts = [paraphrase for paraphrase in i["paraphrase_prompts"]]
+            chosen_paraphrase_answers = [" " + requested_rewrite["target_new"]["str"]]
+            rejected_paraphrase_answers = [" " + requested_rewrite["target_true"]["str"]]
+            """
+            sample = {"prompt": all_prompts, "chosen": all_chosen, "rejected": all_rejected, "lm_prompt": lm_prompts}
+            #print(sample[])
+            #quit()
+            
+            #yield sample
+            data_modified.append((sample, i))
+        return data_modified
+
+class FinetuneDataset(Dataset):
+    def __init__(self, data, rewrite_prompt, paraphrase_prompt, neighborhood_prompt, tokenizer):
+        self.data = data
+        #self.prompt_column = prompt_column
+        self.rewrite_prompt = rewrite_prompt
+        self.paraphrase_prompt = paraphrase_prompt
+        self.neighborhood_prompt = neighborhood_prompt
+        #print("self.prompt_column: ", self.prompt_column)
+        print("self.rewrite_prompt: ", self.rewrite_prompt)
+        print("self.paraphrase_prompt: ", self.paraphrase_prompt)
+        print("self.neighborhood_prompt: ", self.neighborhood_prompt)
+        self.tokenizer = tokenizer
+        self._prepare_data()
+
+    def _prepare_data(self):
+        self.data_prepared = []
+        for i in self.data:
+            target_new = i["requested_rewrite"]["target_new"]["str"]
+            target_true = i["requested_rewrite"]["target_true"]["str"]
+            subject = i["requested_rewrite"]["subject"]
+            if self.rewrite_prompt == True:
+                if self.method == "ft":
+                    prompt = i["requested_rewrite"]["prompt"].format(subject) + " " + target_new
+                elif self.method == "dpo":
+                    prompt = {"prompt": i["requested_rewrite"]["prompt"].format(subject) + " ", "chosen": target_new, "rejected": target_true}
+                self.data_prepared.append(prompt)
+            if self.paraphrase_prompt == True:
+                if self.method == "ft":
+                    prompt = [paraphrase + " " + target_new for paraphrase in i["paraphrase_prompts"]]
+                elif self.method == "dpo":
+                    prompt = {"prompt": i["requested_rewrite"]["prompt"].format(subject) + " ", "chosen": target_new, "rejected": target_true}
+                self.data_prepared.extend(prompt)
+            if self.neighborhood_prompt == True:
+                prompt = [neighborhood + " " + target_true for neighborhood in i["neighborhood_prompts"]]
+                self.data_prepared.extend(prompt)
+            
+    def __len__(self):
+        return len(self.data_prepared)
+
+    def __getitem__(self, idx):
+        #target_true = self.data[idx]["requested_rewrite"]["target_true"]["str"]
+        #target_new = self.data[idx]["requested_rewrite"]["target_new"]["str"]
+        """ 
+        if self.prompt_column == "rewrite":
+            subject = self.data[idx]["requested_rewrite"]["subject"]
+            prompt = self.data[idx]["requested_rewrite"]["prompt"].replace(subject) + " " + target_new
+        elif self.prompt_column == "paraphrase":
+            prompt = [paraphrase + " " + target_new for paraphrase in self.data[idx]["paraphrase_prompts"]]
+        elif self.prompt_column == "neighborhood":
+            prompt = [neighborhood + " " + target_true for neighborhood in self.data[idx]["neighborhood_prompts"]]
+        else:
+            raise NotImplementedError
+        print("prompt: ", prompt)
+        quit()
+        """
+        #print("idx: ", idx)
+        #print(self.data_prepared[idx])
+        #print(self.data_prepared[:20])
+        #quit()
+        tokenized_inputs = self.tokenizer(self.data_prepared[idx], padding="max_length", max_length=150, return_tensors="pt")
+        tokenized_inputs["labels"] = tokenized_inputs["input_ids"]
+        #print("tokenized_inputs: ", tokenized_inputs)
+        return tokenized_inputs#, self.data_prepared[idx]
