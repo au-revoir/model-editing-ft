@@ -16,7 +16,8 @@ from peft import PeftModel
 
 from trl.trainer.utils import DPODataCollatorWithPadding
 from config_dpo import ScriptArguments
-from losses_modified import CustomDPOTrainer
+from losses_modified_prompt_softmax_masking import CustomDPOTrainer
+#from losses_modified import CustomDPOTrainer
 from data_dpo_full_train import DPODataset
 from evaluation import CounterFactEval
 from generate import set_generate_seed 

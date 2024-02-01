@@ -21,6 +21,9 @@ class ScriptArguments:
     alpha_loss: Optional[float] = field(default=None),
     # data parameters
     beta: Optional[float] = field(default=0.1, metadata={"help": "the beta parameter for DPO loss"})
+    #cross_entropy_type: Optional[str] = field(default="no_masking_softmax")
+    ignore_template_labels: Optional[bool] = field(default=False) 
+    mask_softmax: Optional[bool] = field(default=False)
 
     # training parameters
     model_name: Optional[str] = field(
@@ -40,6 +43,7 @@ class ScriptArguments:
     warmup_steps: Optional[int] = field(default=0, metadata={"help": "the number of warmup steps"})
     weight_decay: Optional[float] = field(default=0.05, metadata={"help": "the weight decay"})
     optimizer_type: Optional[str] = field(default="paged_adamw_32bit", metadata={"help": "the optimizer type"})
+    #optimizer_type: Optional[str] = field(default="paged_adamw_8bit", metadata={"help": "the optimizer type"})
 
     per_device_train_batch_size: Optional[int] = field(default=8, metadata={"help": "train batch size per device"})
     per_device_eval_batch_size: Optional[int] = field(default=1, metadata={"help": "eval batch size per device"})
@@ -55,7 +59,9 @@ class ScriptArguments:
     #fp16: Optional[bool] = field(default=False)
 
     lora_alpha: Optional[float] = field(default=16*4, metadata={"help": "the lora alpha parameter"})
+    #lora_alpha: Optional[float] = field(default=16*8, metadata={"help": "the lora alpha parameter"})
     lora_dropout: Optional[float] = field(default=0.05, metadata={"help": "the lora dropout parameter"})
+    #lora_r: Optional[int] = field(default=8*8, metadata={"help": "the lora r parameter"})
     lora_r: Optional[int] = field(default=8*4, metadata={"help": "the lora r parameter"})
 
     max_prompt_length: Optional[int] = field(default=128, metadata={"help": "the maximum prompt length"})
