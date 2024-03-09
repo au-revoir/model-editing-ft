@@ -9,6 +9,7 @@ from data import EditDataset
 from trainer import CustomTrainer
 from eval_counterfact import compute_counterfact_predictions
 from eval_zsre import compute_zsre_predictions
+from eval_wiki_recent import compute_wiki_recent_predictions
 from utils import load_json, create_incremented_directory
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -20,11 +21,11 @@ def main(args):
 
     model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16,
                                                  device_map={"": Accelerator().local_process_index},
-                                                 cache_dir="/data/local/gg676/pretrained_models")
+                                                 )
     
     model_reference = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16,
                                                  device_map={"": Accelerator().local_process_index},
-                                                 cache_dir="/data/local/gg676/pretrained_models")
+                                                 )
     model.config_use = False
     model_reference.config_use = False
 
@@ -39,9 +40,6 @@ def main(args):
     dataset = EditDataset(model, tokenizer, random_prepend_words, args)
     data_formatted = dataset.get_dataset()
     dataset_formatted = Dataset.from_list(data_formatted)
-
-    #print("\ndataset_formatted: ", dataset_formatted[:4])
-    #quit()
 
     training_args = initialize_training_args(args)
 
@@ -73,8 +71,12 @@ def main(args):
     if accelerator.is_main_process:
         if args.dataset_name == "zsre":
             compute_zsre_predictions(trainer.model, tokenizer, dataset.data)
-        else:
+        elif args.dataset_name == "counterfact":
             compute_counterfact_predictions(trainer.model, tokenizer, dataset.data)
+        elif args.dataset_name == "wiki_recent":
+            compute_wiki_recent_predictions(trainer.model, tokenizer, dataset.data) 
+        else:
+            raise NotImplementedError 
 
         model_save_path = create_incremented_directory(args.output_dir)
         trainer.model.save_pretrained("{}/{}".format(model_save_path, args.model_name))
