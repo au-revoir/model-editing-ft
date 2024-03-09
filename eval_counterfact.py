@@ -62,8 +62,6 @@ def compute_counterfact_predictions(model, tokenizer, data):
             )
         }
 
-        #print(ret)
-
         rewrite_success, paraphrase_success, neighborhood_success, rewrite_diff, paraphrase_diff, neighborhood_diff = calculate_accuracy(ret)
 
         rewrite_success_count += rewrite_success

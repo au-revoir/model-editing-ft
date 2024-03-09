@@ -5,7 +5,8 @@ from itertools import chain
 from scipy.stats import hmean
 from tqdm import tqdm
 
-def compute_zsre_predictions(model, tokenizer, data):
+def compute_wiki_recent_predictions(model, tokenizer, data):
+
     rewrite_success_count = 0
     paraphrase_success_count = 0
     neighborhood_success_count = 0
@@ -13,7 +14,6 @@ def compute_zsre_predictions(model, tokenizer, data):
     rewrite_success_count_list = []
     paraphrase_success_count_list = []
     neighborhood_success_count_list = []
-
     for record in tqdm(data):
         subject, target_new, target_true = (
             record["requested_rewrite"][x] for x in ["subject", "target_new", "target_true"]
@@ -22,13 +22,14 @@ def compute_zsre_predictions(model, tokenizer, data):
         paraphrase_prompts = record["paraphrase_prompts"]
         neighborhood_prompts = record["neighborhood_prompts"]
 
-        prob_prompts = [
-        rewrite_prompts,
-        paraphrase_prompts,
-        ]
+        # Form a list of lists of prefixes to test.
+        prob_prompts = [ 
+            rewrite_prompts,
+            paraphrase_prompts,
+        ]   
+        # Flatten all the evaluated prefixes into one list.
         target_tok = tokenizer(" " + target_new["str"])["input_ids"]
         inp_prompts_og = list(chain(*prob_prompts))
-
         inp_prompts = [
             el + tokenizer.decode(target_tok[:i])
             for el in inp_prompts_og
@@ -42,23 +43,29 @@ def compute_zsre_predictions(model, tokenizer, data):
 
         stuff_probs = test_batch_prediction_acc(model, tokenizer, inp_prompts, inp_targets)
 
-        neighborhood_correct = test_batch_prediction_acc(
+        which_correct = [
+            [1 for _ in range(len(neighborhood_prompts))],
+        ]
+        neighborhood_probs, neighborhood_correct = test_batch_prediction( 
             model,
             tokenizer,
             [
                 el["prompt"].format(record["requested_rewrite"])
                 for el in neighborhood_prompts
             ],
-            [el["target"] for el in neighborhood_prompts],
+            list(chain(*which_correct)),
+            [el["target_new"] for el in neighborhood_prompts],
+            [el["target_true"] for el in neighborhood_prompts]
         )
 
-        probs = stuff_probs + neighborhood_correct
+        probs = stuff_probs 
 
+        # Unflatten the results again into a list of lists.
         cutoffs = [0] + np.cumsum(
             [l * len(target_tok) for l in map(len, prob_prompts)]
         ).tolist()
-        ret_probs = [probs[cutoffs[i - 1] : cutoffs[i]] for i in range(1, len(cutoffs))]
 
+        ret_probs = [probs[cutoffs[i - 1] : cutoffs[i]] for i in range(1, len(cutoffs))]
         ret = {
             f"{key}_correct": ret_probs[i]
             for i, key in enumerate(
@@ -68,14 +75,14 @@ def compute_zsre_predictions(model, tokenizer, data):
                 ]
             )
         }
+        ret["neighborhood_prompts_probs"] = neighborhood_probs
 
-        ret["neighborhood_prompts_correct"] = neighborhood_correct
-        
         rewrite_success, paraphrase_success, neighborhood_success  = calculate_accuracy(ret)
     
         rewrite_success_count += rewrite_success
         paraphrase_success_count += paraphrase_success
         neighborhood_success_count += neighborhood_success
+
 
         rewrite_success_count_list.append(rewrite_success)
         paraphrase_success_count_list.append(paraphrase_success)
@@ -93,6 +100,60 @@ def compute_zsre_predictions(model, tokenizer, data):
     print("Paraphrase Accuracy: ", paraphrase_success_count / len(data))
     print("Neighborhood Accuracy: ", neighborhood_success_count / len(data))
     print("Harmonic Score: ", hmean([rewrite_success_count / len(data), paraphrase_success_count / len(data), neighborhood_success_count / len(data)]))
+
+def test_batch_prediction(model, tok, prefixes, which_correct, target_new, target_true):
+    prefix_lens = [len(n) for n in tok(prefixes)["input_ids"]]
+    prompt_tok = tok(
+        [
+            f"{prefix} {suffix}"
+            for prefix in prefixes
+            for suffix in [target_new, target_true]
+        ],
+        padding=True,
+        return_tensors="pt",
+    ).to("cuda")
+
+    a_tok = [tok(f" {n_1}")["input_ids"] for n in target_new for n_1 in n]
+    b_tok = [tok(f" {n_1}")["input_ids"] for n in target_true for n_1 in n]
+
+    choice_a_len = [len(n) for n in a_tok]
+    choice_b_len = [len(n) for n in b_tok]
+
+    with torch.no_grad():
+        logits = model(**prompt_tok).logits
+
+    probs = np.zeros((logits.size(0),), dtype=np.float32)
+    targets_correct = []
+
+
+    for i in range(logits.size(0)):
+        cur_len = choice_a_len[i] if i % 2 == 0 else choice_b_len[i]
+
+        # Compute suffix probabilities
+        for j in range(cur_len):
+            cur_tok = (a_tok[i] if i % 2 == 0 else b_tok[i])[j]
+            probs[i] += -torch.nn.functional.log_softmax(
+                logits[i, prefix_lens[i // 2] + j - 1, :], dim=0
+            )[cur_tok].item()
+        probs[i] /= cur_len
+
+        # Compute accuracy on new targets
+        if (which_correct[i // 2] == 0 and i % 2 == 0) or (
+            which_correct[i // 2] == 1 and i % 2 == 1
+        ):
+            correct = True
+            for j in range(cur_len):
+                cur_tok = (a_tok[i] if i % 2 == 0 else b_tok[i])[j]
+
+                if logits[i, prefix_lens[i // 2] + j - 1, :].argmax().item() != cur_tok:
+                    correct = False
+                    break
+            targets_correct.append(correct)
+
+    return [
+        {"target_new": probs[i].item(), "target_true": probs[i + 1].item()}
+        for i in range(0, len(probs), 2)
+    ], targets_correct
 
 def test_batch_prediction_acc(model, tok, prompts, target):
     prompt_tok = tok(
@@ -117,7 +178,7 @@ def test_batch_prediction_acc(model, tok, prompts, target):
 
 def calculate_accuracy(results):
     cur_sum = collections.defaultdict(lambda: [])
-    for key in ["rewrite", "paraphrase", "neighborhood"]:
+    for key in ["rewrite", "paraphrase"]:
         sum_key = f"{key}_acc"
         key = f"{key}_prompts_correct"
 
@@ -125,4 +186,15 @@ def calculate_accuracy(results):
             continue
 
         cur_sum[sum_key].append(np.mean(results[key]))
-    return cur_sum["rewrite_acc"][0], cur_sum["paraphrase_acc"][0], cur_sum["neighborhood_acc"][0]
+
+    sum_key_discrete = f"neighborhood_success" 
+    key = "neighborhood_prompts_probs"
+    cur_sum[sum_key_discrete].append(
+        np.mean(
+            [
+                x["target_true"] < x["target_new"]
+                for x in results[key]
+            ]
+        )
+    )
+    return cur_sum["rewrite_acc"][0], cur_sum["paraphrase_acc"][0], cur_sum["neighborhood_success"][0]

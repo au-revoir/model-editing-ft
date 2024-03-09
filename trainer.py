@@ -206,8 +206,6 @@ class ComputeCrossEntropyLoss:
             logits = logits[..., :-1, :].contiguous()
             labels = labels[..., 1:].contiguous()
 
-        batch_indices = [i for i in range(logits.shape[0])]
-
         if mask_prompt:
             masks = torch.zeros_like(labels, dtype=torch.bool)
             for i, sublist in enumerate(chosen_targets):

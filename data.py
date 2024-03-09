@@ -26,6 +26,8 @@ class EditDataset:
             self.prepare_zsre_data()
         elif args.dataset_name == "counterfact":
             self.prepare_counterfact_data()
+        elif args.dataset_name == "wiki_recent":
+            self.prepare_wiki_recent_data()
         else:
             raise NotImplementedError
     
@@ -50,6 +52,25 @@ class EditDataset:
                     }
             self.data.append(item)
 
+    def prepare_wiki_recent_data(self):
+        self.data = []
+        for record in self.raw_data:
+            subject = record["subject"]
+            item = {"requested_rewrite": {"prompt": record["prompt"].replace(record["subject"], "{}"), "target_new": {"str": record["target_new"]},
+                                          "target_true": {"str": ""}, "subject": subject},
+                    "paraphrase_prompts": record["paraphrase_prompts"],
+                    "neighborhood_prompts": [
+                          {
+                              "prompt": i["prompts"],
+                              "target_true": i["target_true"],
+                              "target_new": i["target_new"]
+                          }
+                          for i in record["neighborhood_prompts"]
+                      ],
+                    "random_neighborhood_prompts": record["random_neighborhood_prompts"]
+                    }
+            self.data.append(item)
+
     def prepare_counterfact_data(self):
         self.data = []
         for idx, record in enumerate(self.raw_data):
@@ -64,7 +85,7 @@ class EditDataset:
                     "similar_neighborhood_prompts": record["similar_neighborhood_prompts"],
                     }
             if self.include_consistency_text:
-                item["consistency_texts"] = [j["text"] for j in self.wiki_articles[idx]]
+                item["consistency_texts"] = [j["text"] for j in self.wiki_articles[idx]][:3]
             self.data.append(item)
 
     def load_data(self):
